@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace NimbusCMS\Commerce;
 
+use Nimbus\Http\Request;
 use Nimbus\Plugin\Plugin;
 use Nimbus\Plugin\PluginContext;
 use Nimbus\Plugin\PluginStorage;
@@ -39,6 +40,10 @@ final class CommercePlugin implements Plugin
         $orders = new OrderBook($storage, $stock, $emit);
 
         $context->mcp()->register(new CommerceToolset($orders));
+
+        // A read-only admin overview of orders; the lifecycle runs through the tools.
+        $context->adminPages()->register('commerce', 'Commerce', '🧾', static fn (Request $r): string => (new CommerceAdmin($storage))->render());
+
         $context->skills()->register('Commerce', Guide::text());
     }
 }
