@@ -1,0 +1,71 @@
+{
+    "name": "nimbuscms/commerce",
+    "description": "Orders + checkout for NimbusCMS, reserving stock against the Inventory plugin. Agent-drivable over MCP. An official plugin.",
+    "type": "nimbuscms-plugin",
+    "keywords": [
+        "nimbuscms",
+        "nimbuscms-plugin",
+        "commerce",
+        "orders",
+        "checkout",
+        "cms"
+    ],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "DanMat"
+        }
+    ],
+    "require": {
+        "php": ">=8.2",
+        "ext-json": "*",
+        "nimbuscms/nimbus": "dev-main",
+        "nimbuscms/inventory": "dev-main"
+    },
+    "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.95",
+        "phpstan/phpstan": "^2.2",
+        "phpunit/phpunit": "^11.0"
+    },
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/NimbusCMS/nimbus"
+        },
+        {
+            "type": "vcs",
+            "url": "https://github.com/NimbusCMS/plugin-inventory"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "NimbusCMS\\Commerce\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "NimbusCMS\\Commerce\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "nimbus": {
+            "id": "nimbuscms.commerce",
+            "plugin": "NimbusCMS\\Commerce\\CommercePlugin"
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "analyse": "phpstan analyse --memory-limit=512M",
+        "check": [
+            "@analyse",
+            "@test"
+        ],
+        "format": "php-cs-fixer fix",
+        "format:check": "php-cs-fixer fix --dry-run --diff"
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
