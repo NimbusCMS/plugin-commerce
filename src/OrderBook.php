@@ -66,7 +66,7 @@ final class OrderBook
     {
         $port = $this->stock();
         if ($port === null) {
-            throw new \RuntimeException('No inventory plugin is installed, so stock cannot be reserved — an order cannot be placed.');
+            throw new NoInventory('No inventory plugin is installed, so stock cannot be reserved — an order cannot be placed.');
         }
         if ($lines === []) {
             throw new \InvalidArgumentException('An order needs at least one line.');
@@ -124,7 +124,7 @@ final class OrderBook
     {
         $order = $this->requireOrder($ref);
         if ($order['status'] !== self::PAID) {
-            throw new \RuntimeException("Only a paid order can be fulfilled (this one is \"{$order['status']}\").");
+            throw new IllegalTransition((string) $order['status'], self::FULFILLED);
         }
 
         $this->storage()->transaction(function () use ($order, $ref, $actor, $now): void {
@@ -147,7 +147,7 @@ final class OrderBook
     {
         $order = $this->requireOrder($ref);
         if ($order['status'] === self::FULFILLED) {
-            throw new \RuntimeException('A fulfilled order cannot be cancelled.');
+            throw new IllegalTransition(self::FULFILLED, self::CANCELLED);
         }
         if ($order['status'] === self::CANCELLED) {
             return $this->get($ref) ?? throw new \RuntimeException('Unknown order.');
@@ -203,7 +203,7 @@ final class OrderBook
     {
         $order = $this->storage()->selectOne('SELECT * FROM ' . Schema::ORDER . ' WHERE reference = :ref', ['ref' => $ref]);
         if ($order === null) {
-            throw new \RuntimeException("No order with reference \"{$ref}\".");
+            throw new OrderNotFound($ref);
         }
         return $order;
     }
@@ -212,7 +212,7 @@ final class OrderBook
     {
         $order = $this->requireOrder($ref);
         if ($order['status'] !== $from) {
-            throw new \RuntimeException("An order can only move to \"{$to}\" from \"{$from}\" (this one is \"{$order['status']}\").");
+            throw new IllegalTransition((string) $order['status'], $to);
         }
         $this->setStatus((int) $order['id'], $to, $now);
     }
