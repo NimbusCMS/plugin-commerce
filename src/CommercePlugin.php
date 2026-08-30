@@ -42,24 +42,34 @@ final class CommercePlugin implements Plugin
 
         $context->mcp()->register(new CommerceToolset($orders));
 
-        // Admin page: an orders overview + a quick place-order form (H3).
+        // Admin page: an orders overview + place form + per-row lifecycle buttons
+        // (H3). Gated on this plugin's own wildcard-immune capability (ADR 0020) —
+        // advancing an order in the UI needs `nimbuscms.commerce:write`, exactly
+        // like the MCP tools, so a content-only editor can't.
         $context->adminPages()->register(
             'commerce',
             'Commerce',
             '🧾',
-            static fn (Request $r, string $nonce = '', string $csrf = ''): string => (new CommerceAdmin($storage))->render($csrf, $r->query('ok') ?? $r->query('err')),
+            static fn (Request $r, string $nonce = '', string $csrf = ''): string => (new CommerceAdmin($storage))->render($csrf, $r->query('ok') ?? $r->query('err'), $r->query('status')),
+            self::ID . ':write',
         );
         $context->adminPages()->action('commerce', 'place', static function (Request $r) use ($orders): Response {
-            $sku = trim((string) ($r->input('sku') ?? ''));
-            $qty = trim((string) ($r->input('qty') ?? ''));
+            $sku   = trim((string) ($r->input('sku') ?? ''));
+            $qty   = trim((string) ($r->input('qty') ?? ''));
+            $price = trim((string) ($r->input('unit_price') ?? '')) ?: '0';
             if ($sku === '' || $qty === '') {
                 return Response::redirect('/admin/commerce?err=invalid');
+            }
+            // Validate the numbers at the boundary so a non-numeric qty/price is an
+            // honest "badqty" notice, not a database error surfacing as something else.
+            if (preg_match('/^\d+(\.\d{1,4})?$/', $qty) !== 1 || preg_match('/^\d+(\.\d{1,2})?$/', $price) !== 1) {
+                return Response::redirect('/admin/commerce?err=badqty');
             }
             $line = [
                 'sku'        => $sku,
                 'location'   => trim((string) ($r->input('location') ?? '')) ?: 'main',
                 'qty'        => $qty,
-                'unit_price' => trim((string) ($r->input('unit_price') ?? '')) ?: '0',
+                'unit_price' => $price,
             ];
             $email = trim((string) ($r->input('customer_email') ?? '')) ?: null;
             try {
@@ -67,10 +77,40 @@ final class CommercePlugin implements Plugin
                 return Response::redirect('/admin/commerce?ok=placed');
             } catch (\NimbusCMS\Inventory\InsufficientStock) {
                 return Response::redirect('/admin/commerce?err=short');
+            } catch (NoInventory) {
+                return Response::redirect('/admin/commerce?err=noinventory');
+            } catch (\InvalidArgumentException) {
+                return Response::redirect('/admin/commerce?err=badqty');
             } catch (\Throwable) {
                 return Response::redirect('/admin/commerce?err=invalid');
             }
         });
+
+        // The lifecycle actions — the UI catching up to the MCP tools. Each reads
+        // the order reference, advances it, and maps a typed failure to an honest
+        // notice (unknown order vs illegal transition).
+        foreach ([
+            'pay'    => static fn (OrderBook $o, string $ref): array => $o->pay($ref, date('Y-m-d H:i:s')),
+            'fulfil' => static fn (OrderBook $o, string $ref): array => $o->fulfil($ref, 'admin-ui', date('Y-m-d H:i:s')),
+            'cancel' => static fn (OrderBook $o, string $ref): array => $o->cancel($ref, date('Y-m-d H:i:s')),
+        ] as $action => $run) {
+            $context->adminPages()->action('commerce', $action, static function (Request $r) use ($orders, $run, $action): Response {
+                $ref = trim((string) ($r->input('reference') ?? ''));
+                if ($ref === '') {
+                    return Response::redirect('/admin/commerce?err=invalid');
+                }
+                try {
+                    $run($orders, $ref);
+                    return Response::redirect('/admin/commerce?ok=' . ($action === 'pay' ? 'paid' : ($action === 'fulfil' ? 'fulfilled' : 'cancelled')));
+                } catch (OrderNotFound) {
+                    return Response::redirect('/admin/commerce?err=notfound');
+                } catch (IllegalTransition) {
+                    return Response::redirect('/admin/commerce?err=badstate');
+                } catch (\Throwable) {
+                    return Response::redirect('/admin/commerce?err=invalid');
+                }
+            });
+        }
 
         $context->skills()->register('Commerce', Guide::text());
     }
