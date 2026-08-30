@@ -62,7 +62,7 @@ final class OrderBook
      * @throws \RuntimeException         if no inventory plugin is installed
      * @throws \InvalidArgumentException on an empty order
      */
-    public function place(array $lines, ?string $customerEmail, string $now): array
+    public function place(array $lines, ?string $customerEmail, string $now, string $actor = 'system'): array
     {
         $port = $this->stock();
         if ($port === null) {
@@ -73,7 +73,7 @@ final class OrderBook
         }
 
         $ref = $this->newReference();
-        $this->storage()->transaction(function () use ($lines, $customerEmail, $now, $ref, $port): void {
+        $this->storage()->transaction(function () use ($lines, $customerEmail, $now, $ref, $port, $actor): void {
             $s   = $this->storage();
             $oid = $s->insert(
                 'INSERT INTO ' . Schema::ORDER . ' (reference, status, customer_email, currency, total, placed_at, updated_at)
@@ -97,6 +97,7 @@ final class OrderBook
                 'UPDATE ' . Schema::ORDER . ' SET total = (SELECT COALESCE(SUM(qty * unit_price), 0) FROM ' . Schema::LINE . ' WHERE order_id = :oid) WHERE id = :oid2',
                 ['oid' => $oid, 'oid2' => $oid],
             );
+            $this->recordEvent($oid, self::PENDING, $actor, $now);
         });
 
         $this->announce('placed', $ref);
@@ -108,9 +109,16 @@ final class OrderBook
      *
      * @return array<string,mixed>
      */
-    public function pay(string $ref, string $now): array
+    public function pay(string $ref, string $now, string $actor = 'system'): array
     {
-        $this->transition($ref, self::PENDING, self::PAID, $now);
+        $order = $this->requireOrder($ref);
+        if ($order['status'] !== self::PENDING) {
+            throw new IllegalTransition((string) $order['status'], self::PAID);
+        }
+        $this->storage()->transaction(function () use ($order, $actor, $now): void {
+            $this->setStatus((int) $order['id'], self::PAID, $now);
+            $this->recordEvent((int) $order['id'], self::PAID, $actor, $now);
+        });
         $this->announce('paid', $ref);
         return $this->get($ref) ?? throw new \RuntimeException('Unknown order.');
     }
@@ -132,6 +140,7 @@ final class OrderBook
                 $this->stock()?->issue((string) $ln['sku_code'], (string) $ln['location'], (string) $ln['qty'], $this->lineRef($ref, (int) $ln['id']), $actor);
             }
             $this->setStatus((int) $order['id'], self::FULFILLED, $now);
+            $this->recordEvent((int) $order['id'], self::FULFILLED, $actor, $now);
         });
 
         $this->announce('fulfilled', $ref);
@@ -143,7 +152,7 @@ final class OrderBook
      *
      * @return array<string,mixed>
      */
-    public function cancel(string $ref, string $now): array
+    public function cancel(string $ref, string $now, string $actor = 'system'): array
     {
         $order = $this->requireOrder($ref);
         if ($order['status'] === self::FULFILLED) {
@@ -153,11 +162,12 @@ final class OrderBook
             return $this->get($ref) ?? throw new \RuntimeException('Unknown order.');
         }
 
-        $this->storage()->transaction(function () use ($order, $ref, $now): void {
+        $this->storage()->transaction(function () use ($order, $ref, $actor, $now): void {
             foreach ($this->linesOf((int) $order['id']) as $ln) {
                 $this->stock()?->release($this->lineRef($ref, (int) $ln['id']));
             }
             $this->setStatus((int) $order['id'], self::CANCELLED, $now);
+            $this->recordEvent((int) $order['id'], self::CANCELLED, $actor, $now);
         });
 
         $this->announce('cancelled', $ref);
@@ -208,18 +218,39 @@ final class OrderBook
         return $order;
     }
 
-    private function transition(string $ref, string $from, string $to, string $now): void
-    {
-        $order = $this->requireOrder($ref);
-        if ($order['status'] !== $from) {
-            throw new IllegalTransition((string) $order['status'], $to);
-        }
-        $this->setStatus((int) $order['id'], $to, $now);
-    }
-
     private function setStatus(int $orderId, string $status, string $now): void
     {
         $this->storage()->execute('UPDATE ' . Schema::ORDER . ' SET status = :st, updated_at = :now WHERE id = :oid', ['st' => $status, 'now' => $now, 'oid' => $orderId]);
+    }
+
+    /**
+     * Append one row to the order's append-only event log (the timeline). Called
+     * inside each transition's transaction; `actor` is server-set by the caller
+     * (the admin action or the token principal), never from request input.
+     */
+    private function recordEvent(int $orderId, string $status, string $actor, string $now): void
+    {
+        $this->storage()->insert(
+            'INSERT INTO ' . Schema::EVENT . ' (order_id, status, actor, occurred_at) VALUES (:o, :s, :a, :n)',
+            ['o' => $orderId, 's' => $status, 'a' => $actor, 'n' => $now],
+        );
+    }
+
+    /**
+     * The order's lifecycle timeline (append-only), oldest first.
+     *
+     * @return list<array<string,mixed>>
+     */
+    public function timeline(string $ref): array
+    {
+        $order = $this->storage()->selectOne('SELECT id FROM ' . Schema::ORDER . ' WHERE reference = :ref', ['ref' => $ref]);
+        if ($order === null) {
+            return [];
+        }
+        return $this->storage()->select(
+            'SELECT status, actor, occurred_at FROM ' . Schema::EVENT . ' WHERE order_id = :oid ORDER BY id',
+            ['oid' => (int) $order['id']],
+        );
     }
 
     private function lineRef(string $orderRef, int $lineId): string

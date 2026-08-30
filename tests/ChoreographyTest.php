@@ -40,10 +40,10 @@ final class ChoreographyTest extends TestCase
             'user' => getenv('TEST_DB_USER') ?: 'root',
             'pass' => ($p = getenv('TEST_DB_PASS')) !== false ? $p : 'root',
         ]);
-        foreach ([...InventorySchema::all(), ...InventorySchema::reservations(), ...CommerceSchema::all()] as $sql) {
+        foreach ([...InventorySchema::all(), ...InventorySchema::reservations(), ...CommerceSchema::all(), ...CommerceSchema::events()] as $sql) {
             $db->execute($sql);
         }
-        foreach ([InventorySchema::MOVEMENT, InventorySchema::STOCK, InventorySchema::LOCATION, InventorySchema::RESERVATION, CommerceSchema::ORDER, CommerceSchema::LINE] as $t) {
+        foreach ([InventorySchema::MOVEMENT, InventorySchema::STOCK, InventorySchema::LOCATION, InventorySchema::RESERVATION, CommerceSchema::ORDER, CommerceSchema::LINE, CommerceSchema::EVENT] as $t) {
             $db->execute('TRUNCATE ' . $t);
         }
 
