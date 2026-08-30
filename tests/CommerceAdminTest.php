@@ -159,4 +159,17 @@ final class CommerceAdminTest extends TestCase
         self::assertStringNotContainsString('<script>alert(1)</script>', $html);
         self::assertStringContainsString('No order with that reference', $html);
     }
+
+    public function test_styling_is_a_nonced_style_block_not_inline_attributes(): void
+    {
+        // The admin CSP is nonce-only for style-src, so inline style= is dropped.
+        // Styling must live in one nonce-carrying <style> block instead.
+        $this->order('ORD-1', 'pending', 'USD', '12.50', 'house-blend');
+        $html = $this->admin->render('tok', null, null, null, 'NONCE123');
+
+        self::assertStringContainsString('<style nonce="NONCE123">', $html, 'a nonce-carrying style block');
+        self::assertDoesNotMatchRegularExpression('/\sstyle\s*=\s*"/', $html, 'no inline style= attribute survives');
+        // The pill tone still resolves from theme tokens, now inside the block.
+        self::assertStringContainsString('.cx-pill--pending{background:var(--nb-warn-bg)', $html);
+    }
 }
