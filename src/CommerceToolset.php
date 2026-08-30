@@ -68,7 +68,7 @@ final class CommerceToolset extends PluginToolset
      */
     private function place(array $a, TokenPrincipal $p, EntryOpContext $c): array
     {
-        return $this->guard(function () use ($a): array {
+        return $this->guard(function () use ($a, $p): array {
             /** @var list<array{sku:string,location?:string,qty:string,unit_price?:string}> $lines */
             $lines = [];
             foreach (is_array($a['lines'] ?? null) ? $a['lines'] : [] as $ln) {
@@ -77,7 +77,7 @@ final class CommerceToolset extends PluginToolset
                 }
             }
             $email = isset($a['customer_email']) && is_string($a['customer_email']) ? $a['customer_email'] : null;
-            return ['ok' => true, 'order' => $this->orders->place($lines, $email, $this->now())];
+            return ['ok' => true, 'order' => $this->orders->place($lines, $email, $this->now(), $p->name)];
         });
     }
 
@@ -87,7 +87,7 @@ final class CommerceToolset extends PluginToolset
      */
     private function pay(array $a, TokenPrincipal $p, EntryOpContext $c): array
     {
-        return $this->guard(fn (): array => ['ok' => true, 'order' => $this->orders->pay($this->ref($a), $this->now())]);
+        return $this->guard(fn (): array => ['ok' => true, 'order' => $this->orders->pay($this->ref($a), $this->now(), $p->name)]);
     }
 
     /**
@@ -105,7 +105,7 @@ final class CommerceToolset extends PluginToolset
      */
     private function cancel(array $a, TokenPrincipal $p, EntryOpContext $c): array
     {
-        return $this->guard(fn (): array => ['ok' => true, 'order' => $this->orders->cancel($this->ref($a), $this->now())]);
+        return $this->guard(fn (): array => ['ok' => true, 'order' => $this->orders->cancel($this->ref($a), $this->now(), $p->name)]);
     }
 
     /**

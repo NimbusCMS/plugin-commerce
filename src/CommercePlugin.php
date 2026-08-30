@@ -28,6 +28,7 @@ final class CommercePlugin implements Plugin
     public function register(PluginContext $context): void
     {
         $context->migrations()->register('001_orders', Schema::all());
+        $context->migrations()->register('002_order_events', Schema::events());
         $context->capabilities()->declare('Commerce', ['read', 'write']);
 
         $storage = static fn (): PluginStorage => $context->storage();
@@ -50,7 +51,7 @@ final class CommercePlugin implements Plugin
             'commerce',
             'Commerce',
             '🧾',
-            static fn (Request $r, string $nonce = '', string $csrf = ''): string => (new CommerceAdmin($storage))->render($csrf, $r->query('ok') ?? $r->query('err'), $r->query('status')),
+            static fn (Request $r, string $nonce = '', string $csrf = ''): string => (new CommerceAdmin($storage))->render($csrf, $r->query('ok') ?? $r->query('err'), $r->query('status'), $r->query('order')),
             self::ID . ':write',
         );
         $context->adminPages()->action('commerce', 'place', static function (Request $r) use ($orders): Response {
@@ -73,7 +74,7 @@ final class CommercePlugin implements Plugin
             ];
             $email = trim((string) ($r->input('customer_email') ?? '')) ?: null;
             try {
-                $orders->place([$line], $email, date('Y-m-d H:i:s'));
+                $orders->place([$line], $email, date('Y-m-d H:i:s'), 'admin-ui');
                 return Response::redirect('/admin/commerce?ok=placed');
             } catch (\NimbusCMS\Inventory\InsufficientStock) {
                 return Response::redirect('/admin/commerce?err=short');
@@ -90,9 +91,9 @@ final class CommercePlugin implements Plugin
         // the order reference, advances it, and maps a typed failure to an honest
         // notice (unknown order vs illegal transition).
         foreach ([
-            'pay'    => static fn (OrderBook $o, string $ref): array => $o->pay($ref, date('Y-m-d H:i:s')),
+            'pay'    => static fn (OrderBook $o, string $ref): array => $o->pay($ref, date('Y-m-d H:i:s'), 'admin-ui'),
             'fulfil' => static fn (OrderBook $o, string $ref): array => $o->fulfil($ref, 'admin-ui', date('Y-m-d H:i:s')),
-            'cancel' => static fn (OrderBook $o, string $ref): array => $o->cancel($ref, date('Y-m-d H:i:s')),
+            'cancel' => static fn (OrderBook $o, string $ref): array => $o->cancel($ref, date('Y-m-d H:i:s'), 'admin-ui'),
         ] as $action => $run) {
             $context->adminPages()->action('commerce', $action, static function (Request $r) use ($orders, $run, $action): Response {
                 $ref = trim((string) ($r->input('reference') ?? ''));

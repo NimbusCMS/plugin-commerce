@@ -54,10 +54,14 @@ final class CommerceAdmin
      * @param string  $csrf   CSRF token for the forms (passed by core to the page handler)
      * @param ?string $notice a fixed notice code (from the ?ok=/?err= redirect)
      * @param ?string $status a status filter (from ?status=), allow-listed to the known statuses
+     * @param ?string $order  a specific order reference (from ?order=) — renders the detail view
      */
-    public function render(string $csrf = '', ?string $notice = null, ?string $status = null): string
+    public function render(string $csrf = '', ?string $notice = null, ?string $status = null, ?string $order = null): string
     {
         $s = ($this->storage)();
+        if ($order !== null && trim($order) !== '') {
+            return $this->renderDetail($s, trim($order), $notice, $csrf);
+        }
 
         // Allow-list the filter: an unknown value is ignored (never reaches SQL).
         $status = ($status !== null && isset(self::STATUS_TONE[$status])) ? $status : null;
@@ -71,11 +75,7 @@ final class CommerceAdmin
             $s->select('SELECT DISTINCT sku_code FROM ' . Schema::LINE . ' ORDER BY sku_code'),
         );
 
-        $banner = '';
-        if ($notice !== null && isset(self::NOTICES[$notice])) {
-            [$kind, $msg] = self::NOTICES[$notice];
-            $banner = '<div class="nb-notice nb-notice-' . ($kind === 'ok' ? 'ok' : 'error') . '">' . $this->e($msg) . '</div>';
-        }
+        $banner = $this->notice($notice);
 
         $lines = [];
         foreach ($s->select('SELECT order_id, sku_code, qty, unit_price FROM ' . Schema::LINE . ' ORDER BY id') as $l) {
@@ -107,7 +107,7 @@ final class CommerceAdmin
             foreach ($lines[(int) $o['id']] ?? [] as $ln) {
                 $items[] = $this->e((string) $ln['qty']) . ' × <code>' . $this->e((string) $ln['sku_code']) . '</code>';
             }
-            $html .= '<tr><td data-label="Order"><code>' . $this->e((string) $o['reference']) . '</code></td>'
+            $html .= '<tr><td data-label="Order">' . $this->orderLink((string) $o['reference']) . '</td>'
                 . '<td data-label="Status">' . $this->pill((string) $o['status']) . '</td>'
                 . '<td data-label="Customer">' . $this->e((string) ($o['customer_email'] ?? '—')) . '</td>'
                 . '<td data-label="Items" class="nb-muted">' . implode(', ', $items) . '</td>'
@@ -118,6 +118,85 @@ final class CommerceAdmin
 
         $html .= '</tbody></table></div>';
         return $html . $this->placeForm($csrf);
+    }
+
+    /** The order detail view (?order=REF): the order, its lines, and its timeline. */
+    private function renderDetail(PluginStorage $s, string $ref, ?string $notice, string $csrf): string
+    {
+        $order = $s->selectOne('SELECT id, reference, status, customer_email, currency, total, placed_at FROM ' . Schema::ORDER . ' WHERE reference = :ref', ['ref' => $ref]);
+
+        $html = '<div class="nb-page-head"><h1>Commerce</h1></div>' . $this->notice($notice)
+            . '<p style="margin:-8px 0 16px"><a href="/admin/commerce">&larr; All orders</a></p>';
+
+        if ($order === null) {
+            return $html . '<h2 style="margin-top:0">Order <code>' . $this->e($ref) . '</code></h2>'
+                . '<p class="nb-muted">No order with that reference. Check the <a href="/admin/commerce">orders list</a>.</p>';
+        }
+
+        $oid   = (int) $order['id'];
+        $lines = $s->select('SELECT sku_code, qty, unit_price FROM ' . Schema::LINE . ' WHERE order_id = :oid ORDER BY id', ['oid' => $oid]);
+        $events = $s->select('SELECT status, actor, occurred_at FROM ' . Schema::EVENT . ' WHERE order_id = :oid ORDER BY id', ['oid' => $oid]);
+
+        $html .= '<h2 style="margin-top:0">Order <code>' . $this->e((string) $order['reference']) . '</code> ' . $this->pill((string) $order['status']) . '</h2>'
+            . '<p class="nb-muted">' . $this->e((string) ($order['customer_email'] ?? '—')) . ' · '
+            . $this->money((string) $order['total'], (string) $order['currency']) . ' · placed ' . $this->e((string) $order['placed_at']) . '</p>'
+            . '<div style="margin:1rem 0">' . $this->actions((string) $order['reference'], (string) $order['status'], $csrf) . '</div>';
+
+        // Lines
+        $html .= '<h3>Lines</h3><div class="nb-table-wrap nb-stack"><table class="nb-table"><thead><tr>'
+            . '<th>SKU</th><th style="text-align:right">Qty</th><th style="text-align:right">Unit price</th><th style="text-align:right">Line total</th></tr></thead><tbody>';
+        foreach ($lines as $ln) {
+            $lineTotal = number_format((float) $ln['qty'] * (float) $ln['unit_price'], 2, '.', '');
+            $html .= '<tr><td data-label="SKU"><code>' . $this->e((string) $ln['sku_code']) . '</code></td>'
+                . '<td data-label="Qty" style="text-align:right">' . $this->e((string) $ln['qty']) . '</td>'
+                . '<td data-label="Unit price" style="text-align:right">' . $this->money((string) $ln['unit_price'], (string) $order['currency']) . '</td>'
+                . '<td data-label="Line total" style="text-align:right">' . $this->money($lineTotal, (string) $order['currency']) . '</td></tr>';
+        }
+        $html .= '</tbody></table></div>';
+
+        // Timeline
+        $html .= '<h3 style="margin-top:1.5rem">Timeline</h3>';
+        if ($events === []) {
+            $html .= '<p class="nb-muted">No recorded events.</p>';
+        } else {
+            $html .= '<div class="nb-table-wrap nb-stack"><table class="nb-table"><thead><tr>'
+                . '<th>Event</th><th>By</th><th>When</th></tr></thead><tbody>';
+            foreach ($events as $e) {
+                $html .= '<tr><td data-label="Event">' . $this->pill((string) $e['status']) . ' ' . $this->e($this->statusLabel((string) $e['status'])) . '</td>'
+                    . '<td data-label="By">' . $this->e((string) $e['actor']) . '</td>'
+                    . '<td data-label="When" class="nb-muted">' . $this->e((string) $e['occurred_at']) . '</td></tr>';
+            }
+            $html .= '</tbody></table></div>';
+        }
+
+        return $html;
+    }
+
+    private function notice(?string $notice): string
+    {
+        if ($notice === null || !isset(self::NOTICES[$notice])) {
+            return '';
+        }
+        [$kind, $msg] = self::NOTICES[$notice];
+        return '<div class="nb-notice nb-notice-' . ($kind === 'ok' ? 'ok' : 'error') . '">' . $this->e($msg) . '</div>';
+    }
+
+    /** An order reference as a link to its detail view. */
+    private function orderLink(string $ref): string
+    {
+        return '<a href="/admin/commerce?order=' . $this->e(rawurlencode($ref)) . '"><code>' . $this->e($ref) . '</code></a>';
+    }
+
+    /** The human label for a lifecycle status in the timeline (the first event is the placement). */
+    private function statusLabel(string $status): string
+    {
+        return match ($status) {
+            'pending'   => 'Placed',
+            'paid'      => 'Paid',
+            'fulfilled' => 'Fulfilled',
+            'cancelled' => 'Cancelled',
+            default     => $status,
+        };
     }
 
     /** A coloured status pill using theme tokens (dark-safe). */

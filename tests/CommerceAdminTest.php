@@ -30,17 +30,18 @@ final class CommerceAdminTest extends TestCase
             'user' => getenv('TEST_DB_USER') ?: 'root',
             'pass' => ($p = getenv('TEST_DB_PASS')) !== false ? $p : 'root',
         ]);
-        foreach (Schema::all() as $sql) {
+        foreach ([...Schema::all(), ...Schema::events()] as $sql) {
             $this->db->execute($sql);
         }
         $this->db->execute('TRUNCATE ' . Schema::ORDER);
         $this->db->execute('TRUNCATE ' . Schema::LINE);
+        $this->db->execute('TRUNCATE ' . Schema::EVENT);
 
         $this->storage = new PluginStorage($this->db);
         $this->admin   = new CommerceAdmin(fn (): PluginStorage => $this->storage);
     }
 
-    private function order(string $ref, string $status, string $currency, string $total, string $sku): void
+    private function order(string $ref, string $status, string $currency, string $total, string $sku): int
     {
         $oid = $this->storage->insert(
             'INSERT INTO ' . Schema::ORDER . ' (reference, status, customer_email, currency, total, placed_at, updated_at)
@@ -50,6 +51,15 @@ final class CommerceAdminTest extends TestCase
         $this->storage->insert(
             'INSERT INTO ' . Schema::LINE . ' (order_id, sku_code, location, qty, unit_price) VALUES (:o, :sku, :loc, :q, :p)',
             ['o' => $oid, 'sku' => $sku, 'loc' => 'main', 'q' => '2', 'p' => '6.25'],
+        );
+        return $oid;
+    }
+
+    private function event(int $oid, string $status, string $when): void
+    {
+        $this->storage->insert(
+            'INSERT INTO ' . Schema::EVENT . ' (order_id, status, actor, occurred_at) VALUES (:o, :s, :a, :n)',
+            ['o' => $oid, 's' => $status, 'a' => 'admin-ui', 'n' => $when],
         );
     }
 
@@ -113,5 +123,40 @@ final class CommerceAdminTest extends TestCase
 
         self::assertStringContainsString('<datalist id="ord-skus">', $html);
         self::assertStringContainsString('<option value="house-blend">', $html);
+    }
+
+    public function test_order_rows_link_to_the_detail_view(): void
+    {
+        $this->order('ORD-1', 'pending', 'USD', '1.00', 'house-blend');
+        self::assertStringContainsString('href="/admin/commerce?order=ORD-1"', $this->admin->render('tok'));
+    }
+
+    public function test_the_order_detail_shows_lines_and_timeline(): void
+    {
+        $oid = $this->order('ORD-9', 'paid', 'EUR', '12.50', 'house-blend');
+        $this->event($oid, 'pending', '2026-01-01 09:00:00');
+        $this->event($oid, 'paid', '2026-01-01 09:05:00');
+
+        $html = $this->admin->render('tok', null, null, 'ORD-9');
+
+        self::assertStringContainsString('Order <code>ORD-9</code>', $html);
+        self::assertStringContainsString('house-blend', $html, 'the line');
+        self::assertStringContainsString('€12.50', $html, 'total in the order currency');
+        self::assertStringContainsString('Timeline', $html);
+        self::assertStringContainsString('Placed', $html, 'the pending event reads as Placed');
+        self::assertStringContainsString('Paid', $html);
+        self::assertStringContainsString('&larr; All orders', $html, 'back link');
+    }
+
+    public function test_an_unknown_order_shows_a_helpful_note(): void
+    {
+        self::assertStringContainsString('No order with that reference', $this->admin->render('tok', null, null, 'ORD-NOPE'));
+    }
+
+    public function test_the_order_detail_escapes_a_hostile_reference(): void
+    {
+        $html = $this->admin->render('tok', null, null, '"><script>alert(1)</script>');
+        self::assertStringNotContainsString('<script>alert(1)</script>', $html);
+        self::assertStringContainsString('No order with that reference', $html);
     }
 }
