@@ -84,17 +84,18 @@ final class CommerceAdmin
 
         $html = '<div class="nb-page-head"><h1>Commerce</h1></div>' . $banner
             . '<p class="nb-muted" style="margin:-8px 0 20px">Orders reserve stock against Inventory. '
-            . 'Place an order below and advance it with the buttons, or drive the lifecycle over MCP.</p>'
-            . $this->datalist($skus)
-            . $this->placeForm($csrf);
+            . 'Advance an order with its buttons, place a new one below, or drive the lifecycle over MCP.</p>'
+            . $this->datalist($skus);
 
+        // Lead with the orders list + filter, so changing the filter (a page load)
+        // lands here on the list — not scrolled up to the place form.
         $html .= $this->statusFilter($status);
 
         if ($orders === []) {
             $html .= $status === null
-                ? '<p class="nb-muted">No orders yet. Place one above, or with the <code>shop_place_order</code> tool.</p>'
+                ? '<p class="nb-muted">No orders yet. Place one below, or with the <code>shop_place_order</code> tool.</p>'
                 : '<p class="nb-muted">No ' . $this->e($status) . ' orders.</p>';
-            return $html;
+            return $html . $this->placeForm($csrf);
         }
 
         $html .= '<div class="nb-table-wrap nb-stack"><table class="nb-table"><thead><tr>'
@@ -116,7 +117,7 @@ final class CommerceAdmin
         }
 
         $html .= '</tbody></table></div>';
-        return $html;
+        return $html . $this->placeForm($csrf);
     }
 
     /** A coloured status pill using theme tokens (dark-safe). */
@@ -203,7 +204,7 @@ final class CommerceAdmin
                 . '<input id="ord-' . $this->e($name) . '" name="' . $this->e($name) . '"' . $list . ' placeholder="' . $this->e($ph) . '"></div>';
         };
 
-        return '<form class="nb-form-card" method="post" action="/admin/commerce/place" style="margin-bottom:1.5rem">'
+        return '<form class="nb-form-card" method="post" action="/admin/commerce/place" style="margin-top:1.5rem">'
             . '<h2>Place an order</h2>'
             . '<input type="hidden" name="_token" value="' . $this->e($csrf) . '">'
             . '<div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-end">'
