@@ -15,6 +15,11 @@ use Nimbus\Plugin\PluginStorage;
  * escaped before it reaches the page. Status "pills" use the admin theme's
  * semantic tokens (which redefine per theme) rather than hard-coded colours, so
  * they stay legible in dark and every selectable theme.
+ *
+ * The admin CSP is nonce-only for `style-src` (no `'unsafe-inline'`), so inline
+ * `style=` attributes are dropped by the browser. All styling therefore lives in
+ * ONE nonce-carrying `<style>` block ({@see styles}), emitted once per render with
+ * the CSP nonce the page handler receives — never as inline attributes.
  */
 final class CommerceAdmin
 {
@@ -55,12 +60,15 @@ final class CommerceAdmin
      * @param ?string $notice a fixed notice code (from the ?ok=/?err= redirect)
      * @param ?string $status a status filter (from ?status=), allow-listed to the known statuses
      * @param ?string $order  a specific order reference (from ?order=) — renders the detail view
+     * @param string  $nonce  the request CSP nonce (2nd arg the page handler receives)
      */
-    public function render(string $csrf = '', ?string $notice = null, ?string $status = null, ?string $order = null): string
+    public function render(string $csrf = '', ?string $notice = null, ?string $status = null, ?string $order = null, string $nonce = ''): string
     {
-        $s = ($this->storage)();
+        $s      = ($this->storage)();
+        $styles = $this->styles($nonce);
+
         if ($order !== null && trim($order) !== '') {
-            return $this->renderDetail($s, trim($order), $notice, $csrf);
+            return $styles . $this->renderDetail($s, trim($order), $notice, $csrf);
         }
 
         // Allow-list the filter: an unknown value is ignored (never reaches SQL).
@@ -75,15 +83,13 @@ final class CommerceAdmin
             $s->select('SELECT DISTINCT sku_code FROM ' . Schema::LINE . ' ORDER BY sku_code'),
         );
 
-        $banner = $this->notice($notice);
-
         $lines = [];
         foreach ($s->select('SELECT order_id, sku_code, qty, unit_price FROM ' . Schema::LINE . ' ORDER BY id') as $l) {
             $lines[(int) $l['order_id']][] = $l;
         }
 
-        $html = '<div class="nb-page-head"><h1>Commerce</h1></div>' . $banner
-            . '<p class="nb-muted" style="margin:-8px 0 20px">Orders reserve stock against Inventory. '
+        $html = $styles . '<div class="nb-page-head"><h1>Commerce</h1></div>' . $this->notice($notice)
+            . '<p class="nb-muted cx-intro">Orders reserve stock against Inventory. '
             . 'Advance an order with its buttons, place a new one below, or drive the lifecycle over MCP.</p>'
             . $this->datalist($skus);
 
@@ -100,7 +106,7 @@ final class CommerceAdmin
 
         $html .= '<div class="nb-table-wrap nb-stack"><table class="nb-table"><thead><tr>'
             . '<th>Order</th><th>Status</th><th>Customer</th><th>Items</th>'
-            . '<th style="text-align:right">Total</th><th>Placed</th><th>Actions</th></tr></thead><tbody>';
+            . '<th class="cx-r">Total</th><th>Placed</th><th>Actions</th></tr></thead><tbody>';
 
         foreach ($orders as $o) {
             $items = [];
@@ -111,7 +117,7 @@ final class CommerceAdmin
                 . '<td data-label="Status">' . $this->pill((string) $o['status']) . '</td>'
                 . '<td data-label="Customer">' . $this->e((string) ($o['customer_email'] ?? '—')) . '</td>'
                 . '<td data-label="Items" class="nb-muted">' . implode(', ', $items) . '</td>'
-                . '<td data-label="Total" style="text-align:right">' . $this->money((string) $o['total'], (string) $o['currency']) . '</td>'
+                . '<td data-label="Total" class="cx-r">' . $this->money((string) $o['total'], (string) $o['currency']) . '</td>'
                 . '<td data-label="Placed" class="nb-muted">' . $this->e((string) $o['placed_at']) . '</td>'
                 . '<td data-label="Actions">' . $this->actions((string) $o['reference'], (string) $o['status'], $csrf) . '</td></tr>';
         }
@@ -126,36 +132,36 @@ final class CommerceAdmin
         $order = $s->selectOne('SELECT id, reference, status, customer_email, currency, total, placed_at FROM ' . Schema::ORDER . ' WHERE reference = :ref', ['ref' => $ref]);
 
         $html = '<div class="nb-page-head"><h1>Commerce</h1></div>' . $this->notice($notice)
-            . '<p style="margin:-8px 0 16px"><a href="/admin/commerce">&larr; All orders</a></p>';
+            . '<p class="cx-back"><a href="/admin/commerce">&larr; All orders</a></p>';
 
         if ($order === null) {
-            return $html . '<h2 style="margin-top:0">Order <code>' . $this->e($ref) . '</code></h2>'
+            return $html . '<h2 class="cx-mt0">Order <code>' . $this->e($ref) . '</code></h2>'
                 . '<p class="nb-muted">No order with that reference. Check the <a href="/admin/commerce">orders list</a>.</p>';
         }
 
-        $oid   = (int) $order['id'];
-        $lines = $s->select('SELECT sku_code, qty, unit_price FROM ' . Schema::LINE . ' WHERE order_id = :oid ORDER BY id', ['oid' => $oid]);
+        $oid    = (int) $order['id'];
+        $lines  = $s->select('SELECT sku_code, qty, unit_price FROM ' . Schema::LINE . ' WHERE order_id = :oid ORDER BY id', ['oid' => $oid]);
         $events = $s->select('SELECT status, actor, occurred_at FROM ' . Schema::EVENT . ' WHERE order_id = :oid ORDER BY id', ['oid' => $oid]);
 
-        $html .= '<h2 style="margin-top:0">Order <code>' . $this->e((string) $order['reference']) . '</code> ' . $this->pill((string) $order['status']) . '</h2>'
+        $html .= '<h2 class="cx-mt0">Order <code>' . $this->e((string) $order['reference']) . '</code> ' . $this->pill((string) $order['status']) . '</h2>'
             . '<p class="nb-muted">' . $this->e((string) ($order['customer_email'] ?? '—')) . ' · '
             . $this->money((string) $order['total'], (string) $order['currency']) . ' · placed ' . $this->e((string) $order['placed_at']) . '</p>'
-            . '<div style="margin:1rem 0">' . $this->actions((string) $order['reference'], (string) $order['status'], $csrf) . '</div>';
+            . '<div class="cx-actions-wrap">' . $this->actions((string) $order['reference'], (string) $order['status'], $csrf) . '</div>';
 
         // Lines
         $html .= '<h3>Lines</h3><div class="nb-table-wrap nb-stack"><table class="nb-table"><thead><tr>'
-            . '<th>SKU</th><th style="text-align:right">Qty</th><th style="text-align:right">Unit price</th><th style="text-align:right">Line total</th></tr></thead><tbody>';
+            . '<th>SKU</th><th class="cx-r">Qty</th><th class="cx-r">Unit price</th><th class="cx-r">Line total</th></tr></thead><tbody>';
         foreach ($lines as $ln) {
             $lineTotal = number_format((float) $ln['qty'] * (float) $ln['unit_price'], 2, '.', '');
             $html .= '<tr><td data-label="SKU"><code>' . $this->e((string) $ln['sku_code']) . '</code></td>'
-                . '<td data-label="Qty" style="text-align:right">' . $this->e((string) $ln['qty']) . '</td>'
-                . '<td data-label="Unit price" style="text-align:right">' . $this->money((string) $ln['unit_price'], (string) $order['currency']) . '</td>'
-                . '<td data-label="Line total" style="text-align:right">' . $this->money($lineTotal, (string) $order['currency']) . '</td></tr>';
+                . '<td data-label="Qty" class="cx-r">' . $this->e((string) $ln['qty']) . '</td>'
+                . '<td data-label="Unit price" class="cx-r">' . $this->money((string) $ln['unit_price'], (string) $order['currency']) . '</td>'
+                . '<td data-label="Line total" class="cx-r">' . $this->money($lineTotal, (string) $order['currency']) . '</td></tr>';
         }
         $html .= '</tbody></table></div>';
 
         // Timeline
-        $html .= '<h3 style="margin-top:1.5rem">Timeline</h3>';
+        $html .= '<h3 class="cx-mt">Timeline</h3>';
         if ($events === []) {
             $html .= '<p class="nb-muted">No recorded events.</p>';
         } else {
@@ -170,6 +176,32 @@ final class CommerceAdmin
         }
 
         return $html;
+    }
+
+    /**
+     * The one nonce-carrying stylesheet for this page — the CSP is nonce-only, so
+     * this is how the plugin styles its admin surface (inline `style=` is dropped).
+     * The pill tone classes are generated from {@see STATUS_TONE}, so a status and
+     * its colour stay defined in one place.
+     */
+    private function styles(string $nonce): string
+    {
+        $css = '.cx-intro{margin:-8px 0 20px}'
+            . '.cx-back{margin:-8px 0 16px}'
+            . '.cx-mt0{margin-top:0}.cx-mt{margin-top:1.5rem}'
+            . '.cx-r{text-align:right}'
+            . '.cx-actions{display:flex;gap:.4rem;flex-wrap:wrap}.cx-actions form{margin:0}'
+            . '.cx-actions-wrap{margin:1rem 0}'
+            . '.cx-btn-sm{padding:2px 10px;font-size:.8rem}'
+            . '.cx-filter{display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:.75rem}'
+            . '.cx-place{margin-top:1.5rem}'
+            . '.cx-row{display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-end}'
+            . '.cx-field{flex:1 1 130px}'
+            . '.cx-pill{display:inline-block;padding:2px 8px;border-radius:var(--nb-radius-pill,999px);font-size:.8rem;background:var(--nb-surface-2);color:var(--nb-muted)}';
+        foreach (self::STATUS_TONE as $status => $tone) {
+            $css .= '.cx-pill--' . $status . '{background:var(' . $tone[0] . ');color:var(' . $tone[1] . ')}';
+        }
+        return '<style nonce="' . $this->e($nonce) . '">' . $css . '</style>';
     }
 
     private function notice(?string $notice): string
@@ -199,13 +231,11 @@ final class CommerceAdmin
         };
     }
 
-    /** A coloured status pill using theme tokens (dark-safe). */
+    /** A coloured status pill (dark-safe via the nonce'd tone classes in {@see styles}). */
     private function pill(string $status): string
     {
-        [$bg, $fg] = self::STATUS_TONE[$status] ?? ['--nb-surface-2', '--nb-muted'];
-
-        return '<span style="display:inline-block;padding:2px 8px;border-radius:var(--nb-radius-pill,999px);font-size:.8rem;'
-            . 'background:var(' . $bg . ');color:var(' . $fg . ')">' . $this->e($status) . '</span>';
+        $mod = isset(self::STATUS_TONE[$status]) ? ' cx-pill--' . $status : '';
+        return '<span class="cx-pill' . $mod . '">' . $this->e($status) . '</span>';
     }
 
     /** The lifecycle buttons valid for this order's status; each is a CSRF-protected POST. */
@@ -220,13 +250,13 @@ final class CommerceAdmin
             return '<span class="nb-muted">—</span>';
         }
 
-        $out = '<div style="display:flex;gap:.4rem;flex-wrap:wrap">';
+        $out = '<div class="cx-actions">';
         foreach ($verbs as $action => $label) {
             $primary = $action === 'cancel' ? '' : ' nb-btn-primary';
-            $out .= '<form method="post" action="/admin/commerce/' . $this->e($action) . '" style="margin:0">'
+            $out .= '<form method="post" action="/admin/commerce/' . $this->e($action) . '">'
                 . '<input type="hidden" name="_token" value="' . $this->e($csrf) . '">'
                 . '<input type="hidden" name="reference" value="' . $this->e($reference) . '">'
-                . '<button type="submit" class="nb-btn' . $primary . '" style="padding:2px 10px;font-size:.8rem">' . $this->e($label) . '</button>'
+                . '<button type="submit" class="nb-btn cx-btn-sm' . $primary . '">' . $this->e($label) . '</button>'
                 . '</form>';
         }
         return $out . '</div>';
@@ -242,8 +272,7 @@ final class CommerceAdmin
             return '<a class="' . $cls . '" href="' . $this->e($href) . '">' . $this->e($label) . '</a>';
         };
 
-        $out = '<div class="nb-stack" style="display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:.75rem">'
-            . $chip('All', null);
+        $out = '<div class="nb-stack cx-filter">' . $chip('All', null);
         foreach (array_keys(self::STATUS_TONE) as $status) {
             $out .= $chip(ucfirst($status), $status);
         }
@@ -279,14 +308,14 @@ final class CommerceAdmin
     {
         $f = function (string $label, string $name, string $ph, bool $suggest = false): string {
             $list = $suggest ? ' list="ord-skus"' : '';
-            return '<div class="nb-field" style="flex:1 1 130px"><label for="ord-' . $this->e($name) . '">' . $this->e($label) . '</label>'
+            return '<div class="nb-field cx-field"><label for="ord-' . $this->e($name) . '">' . $this->e($label) . '</label>'
                 . '<input id="ord-' . $this->e($name) . '" name="' . $this->e($name) . '"' . $list . ' placeholder="' . $this->e($ph) . '"></div>';
         };
 
-        return '<form class="nb-form-card" method="post" action="/admin/commerce/place" style="margin-top:1.5rem">'
+        return '<form class="nb-form-card cx-place" method="post" action="/admin/commerce/place">'
             . '<h2>Place an order</h2>'
             . '<input type="hidden" name="_token" value="' . $this->e($csrf) . '">'
-            . '<div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-end">'
+            . '<div class="cx-row">'
             . $f('SKU', 'sku', 'house-blend', true)
             . $f('Location', 'location', 'main')
             . $f('Qty', 'qty', '2')

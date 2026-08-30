@@ -51,7 +51,7 @@ final class CommercePlugin implements Plugin
             'commerce',
             'Commerce',
             '🧾',
-            static fn (Request $r, string $nonce = '', string $csrf = ''): string => (new CommerceAdmin($storage))->render($csrf, $r->query('ok') ?? $r->query('err'), $r->query('status'), $r->query('order')),
+            static fn (Request $r, string $nonce = '', string $csrf = ''): string => (new CommerceAdmin($storage))->render($csrf, $r->query('ok') ?? $r->query('err'), $r->query('status'), $r->query('order'), $nonce),
             self::ID . ':write',
         );
         $context->adminPages()->action('commerce', 'place', static function (Request $r) use ($orders): Response {
