@@ -9,6 +9,7 @@ use Nimbus\Http\Response;
 use Nimbus\Plugin\Plugin;
 use Nimbus\Plugin\PluginContext;
 use Nimbus\Plugin\PluginStorage;
+use NimbusCMS\Inventory\CatalogReadPort;
 use NimbusCMS\Inventory\ReservationPort;
 
 /**
@@ -29,6 +30,7 @@ final class CommercePlugin implements Plugin
     {
         $context->migrations()->register('001_orders', Schema::all());
         $context->migrations()->register('002_order_events', Schema::events());
+        $context->migrations()->register('003_cart', Schema::cart());
         $context->capabilities()->declare('Commerce', ['read', 'write']);
 
         $storage = static fn (): PluginStorage => $context->storage();
@@ -40,6 +42,17 @@ final class CommercePlugin implements Plugin
         $stock = static fn (): ?ReservationPort => $context->services()->get(ReservationPort::class);
 
         $orders = new OrderBook($storage, $stock, $emit);
+
+        // The public cart (ADR 0026): its own tables, priced server-side from the
+        // Inventory catalog port, placed through OrderBook. Published so the
+        // Storefront can drive checkout without touching Commerce's tables.
+        $catalog = static fn (): ?CatalogReadPort => $context->services()->get(CatalogReadPort::class);
+        $cart    = new Cart($storage, $catalog, $orders);
+        $context->services()->provide(CartPort::class, new CartAdapter($cart));
+
+        // Sweep abandoned carts (a client row per anonymous visitor) on the
+        // maintenance schedule, so the table can't grow without bound.
+        $context->maintenance()->register('commerce-cart-gc', static fn (): int => $cart->gc(date('Y-m-d H:i:s')));
 
         $context->mcp()->register(new CommerceToolset($orders));
 

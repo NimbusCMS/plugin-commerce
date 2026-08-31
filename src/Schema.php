@@ -14,6 +14,41 @@ final class Schema
     public const ORDER = 'commerce_order';
     public const LINE  = 'commerce_order_line';
     public const EVENT = 'commerce_order_event';
+    public const CART      = 'commerce_cart';
+    public const CART_LINE = 'commerce_cart_line';
+
+    /**
+     * The public shopping cart (ADR 0026). A cart is authorised solely by its
+     * opaque, cryptographically-random `cart_token` (the cookie) — never a
+     * guessable id — and carries a per-cart `csrf` secret rendered into every form
+     * and verified on the state-changing POSTs (core CSRF is session/admin-only).
+     * A line stores **only** `{sku, qty}` — **never a price**; price is resolved
+     * server-side from the Inventory item at render and at checkout, so a client
+     * can never influence what it pays. Abandoned carts are GC'd by a maintenance
+     * task.
+     *
+     * @return list<string> each statement individually idempotent (ADR 0005)
+     */
+    public static function cart(): array
+    {
+        return [
+            'CREATE TABLE IF NOT EXISTS ' . self::CART . ' (
+                cart_token VARCHAR(64) NOT NULL PRIMARY KEY,
+                csrf       VARCHAR(64) NOT NULL,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                INDEX idx_cart_updated (updated_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
+
+            'CREATE TABLE IF NOT EXISTS ' . self::CART_LINE . ' (
+                cart_token VARCHAR(64) NOT NULL,
+                sku_code   VARCHAR(80) NOT NULL,
+                qty        INT UNSIGNED NOT NULL,
+                added_at   DATETIME NOT NULL,
+                PRIMARY KEY (cart_token, sku_code)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
+        ];
+    }
 
     /** @return list<string> each statement individually idempotent (ADR 0005) */
     public static function all(): array
