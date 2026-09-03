@@ -50,6 +50,10 @@ final class CommercePlugin implements Plugin
         $cart    = new Cart($storage, $catalog, $orders);
         $context->services()->provide(CartPort::class, new CartAdapter($cart));
 
+        // A public-safe order read (ADR 0026), so a storefront can render an
+        // itemised confirmation without touching Commerce's tables or its PII.
+        $context->services()->provide(OrderReadPort::class, new OrderReadAdapter($orders));
+
         // Sweep abandoned carts (a client row per anonymous visitor) on the
         // maintenance schedule, so the table can't grow without bound.
         $context->maintenance()->register('commerce-cart-gc', static fn (): int => $cart->gc(date('Y-m-d H:i:s')));
